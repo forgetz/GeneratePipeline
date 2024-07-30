@@ -9,12 +9,25 @@ const gitlabToken = 'YOUR_GITLAB_PERSONAL_ACCESS_TOKEN';
 const gitlabApiUrl = 'https://gitlab.com/api/v4';
 const excelFilePath = './projects.xlsx';
 
-// Function to read projects from Excel
 function readProjectsFromExcel() {
   const workbook = XLSX.readFile(excelFilePath);
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
-  return XLSX.utils.sheet_to_json(sheet);
+  const projects = XLSX.utils.sheet_to_json(sheet);
+
+  return projects.map(project => ({
+    ...project,
+    replacementValues: parseReplacementValues(project.replacementValues)
+  }));
+}
+
+function parseReplacementValues(replacementValuesString) {
+  const pairs = replacementValuesString.split(',');
+  return pairs.reduce((acc, pair) => {
+    const [key, value] = pair.trim().split('=');
+    acc[key.trim()] = value.trim();
+    return acc;
+  }, {});
 }
 
 function getLatestRepo(gitlabRepoUrl, localRepoPath) {
@@ -99,19 +112,20 @@ function removeTempPath(localRepoPath) {
   }
 }
 
-async function processProject(project) {
-  const localRepoPath = `./${project.newProjectName}`;
+async function processProject(project, prefix, namespaceId, templateRepo) {
+  const prefixedProjectName = `${prefix}-${project.projectName}`;
+  const localRepoPath = `./${prefixedProjectName}`;
   
   try {
-    getLatestRepo(project.gitlabRepoUrl, localRepoPath);
+    getLatestRepo(templateRepo, localRepoPath);
     replaceValuesInFiles(localRepoPath, project.replacementValues);
     removeGitFolder(localRepoPath);
-    const newRepoUrl = await createNewProject(project.newProjectName, project.namespaceId);
+    const newRepoUrl = await createNewProject(prefixedProjectName, namespaceId);
     pushToNewRepo(localRepoPath, newRepoUrl);
     removeTempPath(localRepoPath);
-    console.log(`Process completed successfully for project: ${project.newProjectName}`);
+    console.log(`Process completed successfully for project: ${prefixedProjectName}`);
   } catch (error) {
-    console.error(`An error occurred for project ${project.newProjectName}:`, error.message);
+    console.error(`An error occurred for project ${prefixedProjectName}:`, error.message);
   }
 }
 
@@ -119,10 +133,14 @@ async function main() {
   const projects = readProjectsFromExcel();
   
   for (const project of projects) {
-    await processProject(project);
+    // Process for CI
+    await processProject(project, 'CI', project.ciNamespaceId, project['ci-template-repo']);
+    
+    // Process for CD
+    await processProject(project, 'CD', project.cdNamespaceId, project['cd-template-repo']);
   }
   
-  console.log('All projects processed.');
+  console.log('All projects processed for both CI and CD.');
 }
 
 main();
