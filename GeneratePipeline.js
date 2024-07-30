@@ -2,12 +2,20 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const https = require('https');
 const XLSX = require('xlsx');
 
 // Configuration
 const gitlabToken = 'YOUR_GITLAB_PERSONAL_ACCESS_TOKEN';
 const gitlabApiUrl = 'https://gitlab.com/api/v4';
 const excelFilePath = './projects.xlsx';
+
+// Create a custom axios instance with certificate verification disabled
+const axiosInstance = axios.create({
+  httpsAgent: new https.Agent({  
+    rejectUnauthorized: false
+  })
+});
 
 function readProjectsFromExcel() {
   const workbook = XLSX.readFile(excelFilePath);
@@ -80,7 +88,7 @@ function removeGitFolder(localRepoPath) {
 
 async function createNewProject(newProjectName, namespaceId) {
   try {
-    const response = await axios.post(`${gitlabApiUrl}/projects`, {
+    const response = await axiosInstance.post(`${gitlabApiUrl}/projects`, {
       name: newProjectName,
       namespace_id: namespaceId
     }, {
