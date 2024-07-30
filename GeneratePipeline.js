@@ -25,7 +25,8 @@ function readProjectsFromExcel() {
 
   return projects.map(project => ({
     ...project,
-    replacementValues: parseReplacementValues(project.replacementValues)
+    replacementValues: parseReplacementValues(project.replacementValues),
+    delete_existing: project.delete_existing === 'true' // Convert string to boolean
   }));
 }
 
@@ -86,7 +87,28 @@ function removeGitFolder(localRepoPath) {
   }
 }
 
-async function createNewProject(newProjectName, namespaceId) {
+async function deleteExistingProject(projectName, namespaceId) {
+  try {
+    const encodedProjectName = encodeURIComponent(`${namespaceId}/${projectName}`);
+    await axiosInstance.delete(`${gitlabApiUrl}/projects/${encodedProjectName}`, {
+      headers: { 'PRIVATE-TOKEN': gitlabToken }
+    });
+    console.log(`Existing project ${projectName} deleted successfully.`);
+  } catch (error) {
+    if (error.response && error.response.status === 404) {
+      console.log(`Project ${projectName} not found. Proceeding with creation.`);
+    } else {
+      console.error(`Error deleting project ${projectName}:`, error.response?.data || error.message);
+      throw error;
+    }
+  }
+}
+
+async function createNewProject(newProjectName, namespaceId, deleteExisting) {
+  if (deleteExisting) {
+    await deleteExistingProject(newProjectName, namespaceId);
+  }
+
   try {
     const response = await axiosInstance.post(`${gitlabApiUrl}/projects`, {
       name: newProjectName,
@@ -128,7 +150,7 @@ async function processProject(project, prefix, namespaceId, templateRepo) {
     getLatestRepo(templateRepo, localRepoPath);
     replaceValuesInFiles(localRepoPath, project.replacementValues);
     removeGitFolder(localRepoPath);
-    const newRepoUrl = await createNewProject(prefixedProjectName, namespaceId);
+    const newRepoUrl = await createNewProject(prefixedProjectName, namespaceId, project.delete_existing);
     pushToNewRepo(localRepoPath, newRepoUrl);
     removeTempPath(localRepoPath);
     console.log(`Process completed successfully for project: ${prefixedProjectName}`);
