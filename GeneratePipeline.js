@@ -87,20 +87,39 @@ function removeGitFolder(localRepoPath) {
   }
 }
 
-async function deleteExistingProject(projectName, namespaceId) {
+async function findProjectId(projectName, namespaceId) {
   try {
-    const encodedProjectName = encodeURIComponent(`${namespaceId}/${projectName}`);
-    await axiosInstance.delete(`${gitlabApiUrl}/projects/${encodedProjectName}`, {
+    const response = await axiosInstance.get(`${gitlabApiUrl}/projects`, {
+      params: {
+        search: projectName,
+        namespace_id: namespaceId
+      },
+      headers: { 'PRIVATE-TOKEN': gitlabToken }
+    });
+
+    const project = response.data.find(p => p.name === projectName);
+    return project ? project.id : null;
+  } catch (error) {
+    console.error(`Error finding project ${projectName}:`, error.response?.data || error.message);
+    return null;
+  }
+}
+
+async function deleteExistingProject(projectName, namespaceId) {
+  const projectId = await findProjectId(projectName, namespaceId);
+  if (!projectId) {
+    console.log(`Project ${projectName} not found. Proceeding with creation.`);
+    return;
+  }
+
+  try {
+    await axiosInstance.delete(`${gitlabApiUrl}/projects/${projectId}`, {
       headers: { 'PRIVATE-TOKEN': gitlabToken }
     });
     console.log(`Existing project ${projectName} deleted successfully.`);
   } catch (error) {
-    if (error.response && error.response.status === 404) {
-      console.log(`Project ${projectName} not found. Proceeding with creation.`);
-    } else {
-      console.error(`Error deleting project ${projectName}:`, error.response?.data || error.message);
-      throw error;
-    }
+    console.error(`Error deleting project ${projectName}:`, error.response?.data || error.message);
+    throw error;
   }
 }
 
@@ -117,7 +136,7 @@ async function createNewProject(newProjectName, namespaceId, deleteExisting) {
       headers: { 'PRIVATE-TOKEN': gitlabToken }
     });
     console.log('New project created successfully.');
-    return response.data.http_url_to_repo;
+    return response.data.ssh_url_to_repo;
   } catch (error) {
     console.error('Error creating new project:', error.response?.data || error.message);
     throw error;
@@ -129,7 +148,7 @@ function pushToNewRepo(localRepoPath, newRepoUrl) {
   execSync(`git add .`, { cwd: localRepoPath });
   execSync(`git commit -m "Initial commit"`, { cwd: localRepoPath });
   execSync(`git remote add origin ${newRepoUrl}`, { cwd: localRepoPath });
-  execSync(`git push -u origin master`, { cwd: localRepoPath });
+  execSync(`git push -u origin main`, { cwd: localRepoPath });
   console.log('Files pushed to the new repository successfully.');
 }
 
