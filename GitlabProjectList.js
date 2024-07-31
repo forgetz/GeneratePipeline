@@ -1,17 +1,24 @@
 const axios = require('axios');
 const ExcelJS = require('exceljs');
+const https = require('https');
 
 // GitLab API configuration
 const GITLAB_URL = 'https://gitlab.com/api/v4';
 const GITLAB_TOKEN = 'YOUR_GITLAB_PERSONAL_ACCESS_TOKEN';
 const NAMESPACE_ID = 'YOUR_NAMESPACE_ID';
 
+// Create a custom HTTPS agent that ignores SSL certificate errors
+const httpsAgent = new https.Agent({
+  rejectUnauthorized: false
+});
+
 // Function to fetch projects from GitLab API
 async function fetchProjects(page = 1, perPage = 100) {
   try {
     const response = await axios.get(`${GITLAB_URL}/groups/${NAMESPACE_ID}/projects`, {
       headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN },
-      params: { page, per_page: perPage }
+      params: { page, per_page: perPage },
+      httpsAgent: httpsAgent // Use the custom HTTPS agent
     });
     return response.data;
   } catch (error) {
