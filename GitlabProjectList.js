@@ -5,20 +5,35 @@ const https = require('https');
 // GitLab API configuration
 const GITLAB_URL = 'https://gitlab.com/api/v4';
 const GITLAB_TOKEN = 'YOUR_GITLAB_PERSONAL_ACCESS_TOKEN';
-const NAMESPACE_ID = 'YOUR_NAMESPACE_ID';
+const GROUP_URL = 'https://gitlab.com/your-group/subgroup'; // Replace with your group URL
 
 // Create a custom HTTPS agent that ignores SSL certificate errors
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false
 });
 
-// Function to fetch projects from GitLab API
-async function fetchProjects(page = 1, perPage = 100) {
+// Function to get group ID from URL
+async function getGroupId(groupUrl) {
+  const encodedPath = encodeURIComponent(new URL(groupUrl).pathname.slice(1));
   try {
-    const response = await axios.get(`${GITLAB_URL}/groups/${NAMESPACE_ID}/projects`, {
+    const response = await axios.get(`${GITLAB_URL}/groups/${encodedPath}`, {
+      headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN },
+      httpsAgent: httpsAgent
+    });
+    return response.data.id;
+  } catch (error) {
+    console.error('Error fetching group ID:', error.message);
+    process.exit(1);
+  }
+}
+
+// Function to fetch projects from GitLab API
+async function fetchProjects(groupId, page = 1, perPage = 100) {
+  try {
+    const response = await axios.get(`${GITLAB_URL}/groups/${groupId}/projects`, {
       headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN },
       params: { page, per_page: perPage },
-      httpsAgent: httpsAgent // Use the custom HTTPS agent
+      httpsAgent: httpsAgent
     });
     return response.data;
   } catch (error) {
@@ -54,12 +69,15 @@ async function exportToExcel(projects) {
 
 // Main function
 async function main() {
+  const groupId = await getGroupId(GROUP_URL);
+  console.log(`Found group ID: ${groupId}`);
+
   let allProjects = [];
   let page = 1;
   let hasMoreProjects = true;
 
   while (hasMoreProjects) {
-    const projects = await fetchProjects(page);
+    const projects = await fetchProjects(groupId, page);
     if (projects.length === 0) {
       hasMoreProjects = false;
     } else {
