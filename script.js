@@ -12,6 +12,10 @@ const GITLAB_API = `${GITLAB_URL}/api/v4`;
 const CI_TEMPLATE_URL = 'git@gitlab-devops.aeonth.com:devops/pipeline-template/ci-template/ci-example.git';
 const CD_TEMPLATE_URL = 'git@gitlab-devops.aeonth.com:devops/pipeline-template/cd-template/cd-example.git';
 
+// Parent paths for CI and CD
+const CI_PARENT_PATH = 'devops/pipeline-template/ci';
+const CD_PARENT_PATH = 'devops/pipeline-template/cd';
+
 // Create a custom HTTPS agent that ignores SSL certificate errors
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false
@@ -137,17 +141,13 @@ async function pushToGitlab(localPath, remoteUrl) {
 async function setupCICD(appName, teamName) {
   try {
     const token = await getGitlabToken();
-    const parentPath = 'devops/pipeline-template';
-
-    // Get parent group ID
-    const parentId = await getParentGroupId(token, parentPath);
-
-    // Get or create team folder
-    const groupId = await getOrCreateGitlabFolder(teamName, parentId, token);
 
     // CI Setup
+    console.log('Setting up CI...');
+    const ciParentId = await getParentGroupId(token, CI_PARENT_PATH);
+    const ciGroupId = await getOrCreateGitlabFolder(teamName, ciParentId, token);
     const ciProjectName = `ci-${appName}`;
-    const ciProjectUrl = await createGitlabProject(ciProjectName, groupId, token);
+    const ciProjectUrl = await createGitlabProject(ciProjectName, ciGroupId, token);
     if (ciProjectUrl) {
       const ciLocalPath = `./${ciProjectName}`;
       await cloneAndModifyRepository(CI_TEMPLATE_URL, ciLocalPath, appName, teamName);
@@ -155,8 +155,11 @@ async function setupCICD(appName, teamName) {
     }
 
     // CD Setup
+    console.log('Setting up CD...');
+    const cdParentId = await getParentGroupId(token, CD_PARENT_PATH);
+    const cdGroupId = await getOrCreateGitlabFolder(teamName, cdParentId, token);
     const cdProjectName = `cd-${appName}`;
-    const cdProjectUrl = await createGitlabProject(cdProjectName, groupId, token);
+    const cdProjectUrl = await createGitlabProject(cdProjectName, cdGroupId, token);
     if (cdProjectUrl) {
       const cdLocalPath = `./${cdProjectName}`;
       await cloneAndModifyRepository(CD_TEMPLATE_URL, cdLocalPath, appName, teamName);
@@ -170,4 +173,4 @@ async function setupCICD(appName, teamName) {
 }
 
 // Usage
-setupCICD('otpapi', 'infra');
+setupCICD('otpapi', 'spi');
