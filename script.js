@@ -115,19 +115,28 @@ async function createGitlabProject(projectName, groupId, token) {
   }
 }
 
+async function modifyFiles(dirPath, appName, teamName) {
+  const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      await modifyFiles(fullPath, appName, teamName);
+    } else if (entry.isFile()) {
+      let content = await fs.readFile(fullPath, 'utf8');
+      content = content.replace(/{{VALUE_APP_NAME}}/g, appName)
+                       .replace(/{{VALUE_TEAM_NAME}}/g, teamName);
+      await fs.writeFile(fullPath, content);
+    }
+  }
+}
+
 async function cloneAndModifyRepository(templateUrl, localPath, appName, teamName) {
   console.log(`Cloning template repository: ${templateUrl}`);
   await simpleGit().clone(templateUrl, localPath);
 
   console.log('Modifying files...');
-  const files = await fs.readdir(localPath);
-  for (const file of files) {
-    const filePath = path.join(localPath, file);
-    let content = await fs.readFile(filePath, 'utf8');
-    content = content.replace(/{{VALUE_APP_NAME}}/g, appName)
-                     .replace(/{{VALUE_TEAM_NAME}}/g, teamName);
-    await fs.writeFile(filePath, content);
-  }
+  await modifyFiles(localPath, appName, teamName);
 }
 
 async function pushToGitlab(localPath, remoteUrl) {
@@ -173,4 +182,4 @@ async function setupCICD(appName, teamName) {
 }
 
 // Usage
-setupCICD('otpapi', 'spi');
+setupCICD('otpapi', 'infra');
