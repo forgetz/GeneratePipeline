@@ -199,4 +199,4 @@ async function setupCICD(appName, teamName) {
 }
 
 // Usage
-setupCICD('otpapi', 'spi');
+setupCICD('otpapi', 'infra'); //
