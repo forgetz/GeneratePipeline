@@ -1,4 +1,5 @@
 const axios = require('axios');
+const https = require('https');
 const { promises: fs } = require('fs');
 const path = require('path');
 const simpleGit = require('simple-git');
@@ -6,6 +7,13 @@ const csv = require('csv-parse/sync');
 
 const GITLAB_API_URL = 'https://gitlab-devops.aeonth.com/api/v4';
 const GITLAB_TOKEN = 'YOUR_GITLAB_PERSONAL_ACCESS_TOKEN';
+
+// Create a custom Axios instance with SSL verification disabled
+const axiosInstance = axios.create({
+  httpsAgent: new https.Agent({  
+    rejectUnauthorized: false
+  })
+});
 
 async function processProjects(csvFilePath) {
   try {
@@ -29,16 +37,10 @@ async function setupCICD(appName, teamName, repoUrl, ciTemplateUrl, cdTemplateUr
   try {
     console.log(`Setting up CI/CD for ${appName} (${teamName})`);
 
-    // Step 1: Check and create team folder in CI
     await createFolderIfNotExists(ciPath);
-
-    // Step 2: Import CI template
     await importTemplate(ciTemplateUrl, `${ciPath}/${appName}-ci`);
-
-    // Step 3: Replace values in CI files
     await replaceValuesInFiles(`${ciPath}/${appName}-ci`, appName, teamName);
 
-    // Repeat for CD
     await createFolderIfNotExists(cdPath);
     await importTemplate(cdTemplateUrl, `${cdPath}/${appName}-cd`);
     await replaceValuesInFiles(`${cdPath}/${appName}-cd`, appName, teamName);
@@ -51,13 +53,13 @@ async function setupCICD(appName, teamName, repoUrl, ciTemplateUrl, cdTemplateUr
 
 async function createFolderIfNotExists(folderPath) {
   try {
-    await axios.get(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template${encodeURIComponent(folderPath)}`, {
+    await axiosInstance.get(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template${encodeURIComponent(folderPath)}`, {
       headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
     });
     console.log(`Folder ${folderPath} already exists.`);
   } catch (error) {
     if (error.response && error.response.status === 404) {
-      await axios.post(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/files${encodeURIComponent(folderPath)}%2F.gitkeep`, {
+      await axiosInstance.post(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/files${encodeURIComponent(folderPath)}%2F.gitkeep`, {
         branch: 'main',
         content: '',
         commit_message: `Create ${folderPath} folder`
@@ -78,7 +80,7 @@ async function importTemplate(templateUrl, destinationPath) {
   const git = simpleGit();
   await git.clone(templateUrl, tempDir);
 
-  await axios.post(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/files${encodeURIComponent(destinationPath)}`, {
+  await axiosInstance.post(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/files${encodeURIComponent(destinationPath)}`, {
     branch: 'main',
     content: await fs.readFile(path.join(tempDir, 'README.md'), 'utf8'),
     commit_message: `Import template to ${destinationPath}`
@@ -91,13 +93,13 @@ async function importTemplate(templateUrl, destinationPath) {
 }
 
 async function replaceValuesInFiles(folderPath, appName, teamName) {
-  const files = await axios.get(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/tree`, {
+  const files = await axiosInstance.get(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/tree`, {
     params: { path: folderPath },
     headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
   });
 
   for (const file of files.data) {
-    const content = await axios.get(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/files/${encodeURIComponent(file.path)}/raw`, {
+    const content = await axiosInstance.get(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/files/${encodeURIComponent(file.path)}/raw`, {
       params: { ref: 'main' },
       headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
     });
@@ -106,7 +108,7 @@ async function replaceValuesInFiles(folderPath, appName, teamName) {
       .replace(/{{VALUE_APP_NAME}}/g, appName)
       .replace(/{{VALUE_TEAM_NAME}}/g, teamName);
 
-    await axios.put(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/files/${encodeURIComponent(file.path)}`, {
+    await axiosInstance.put(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/files/${encodeURIComponent(file.path)}`, {
       branch: 'main',
       content: updatedContent,
       commit_message: `Update ${file.path}`
