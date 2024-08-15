@@ -1,25 +1,43 @@
 const axios = require('axios');
+const https = require('https');
 const simpleGit = require('simple-git');
 const fs = require('fs').promises;
 const path = require('path');
 
 // GitLab API configuration
 const GITLAB_URL = 'https://gitlab-devops.aeonth.com';
-const GITLAB_TOKEN = 'YOUR_GITLAB_TOKEN';
 const GITLAB_API = `${GITLAB_URL}/api/v4`;
 
-// Disable certificate verification (not recommended for production)
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+// Create a custom HTTPS agent that ignores SSL certificate errors
+const httpsAgent = new https.Agent({
+  rejectUnauthorized: false
+});
 
-async function createGitlabFolder(teamName) {
+// Create an axios instance with the custom agent
+const axiosInstance = axios.create({
+  httpsAgent: httpsAgent
+});
+
+// Function to read GitLab token from file
+async function getGitlabToken() {
+  try {
+    const token = await fs.readFile('gitlab_token.txt', 'utf8');
+    return token.trim();
+  } catch (error) {
+    console.error('Error reading GitLab token:', error.message);
+    throw error;
+  }
+}
+
+async function createGitlabFolder(teamName, token) {
   console.log(`Creating GitLab folder for team: ${teamName}`);
   try {
-    const response = await axios.post(`${GITLAB_API}/groups`, {
+    const response = await axiosInstance.post(`${GITLAB_API}/groups`, {
       name: teamName,
       path: teamName,
       parent_id: 'PARENT_GROUP_ID', // Replace with the actual parent group ID
     }, {
-      headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
+      headers: { 'PRIVATE-TOKEN': token }
     });
     console.log(`Folder created successfully: ${response.data.web_url}`);
     return response.data.id;
@@ -33,14 +51,14 @@ async function createGitlabFolder(teamName) {
   }
 }
 
-async function createGitlabProject(projectName, groupId) {
+async function createGitlabProject(projectName, groupId, token) {
   console.log(`Creating GitLab project: ${projectName}`);
   try {
-    const response = await axios.post(`${GITLAB_API}/projects`, {
+    const response = await axiosInstance.post(`${GITLAB_API}/projects`, {
       name: projectName,
       namespace_id: groupId,
     }, {
-      headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
+      headers: { 'PRIVATE-TOKEN': token }
     });
     console.log(`Project created successfully: ${response.data.web_url}`);
     return response.data.ssh_url_to_repo;
@@ -79,9 +97,11 @@ async function pushToGitlab(localPath, remoteUrl) {
 
 async function setupCICD(appName, teamName) {
   try {
+    const token = await getGitlabToken();
+
     // CI Setup
-    const ciGroupId = await createGitlabFolder(teamName);
-    const ciProjectUrl = await createGitlabProject(`ci-${teamName}`, ciGroupId);
+    const ciGroupId = await createGitlabFolder(teamName, token);
+    const ciProjectUrl = await createGitlabProject(`ci-${teamName}`, ciGroupId, token);
     if (ciProjectUrl) {
       const ciLocalPath = `./ci-${teamName}`;
       await cloneAndModifyRepository('https://gitlab-devops.aeonth.com/devops/pipeline-template/ci-template/ci-example.git', ciLocalPath, appName, teamName);
@@ -89,8 +109,8 @@ async function setupCICD(appName, teamName) {
     }
 
     // CD Setup
-    const cdGroupId = await createGitlabFolder(teamName);
-    const cdProjectUrl = await createGitlabProject(`cd-${teamName}`, cdGroupId);
+    const cdGroupId = await createGitlabFolder(teamName, token);
+    const cdProjectUrl = await createGitlabProject(`cd-${teamName}`, cdGroupId, token);
     if (cdProjectUrl) {
       const cdLocalPath = `./cd-${teamName}`;
       await cloneAndModifyRepository('https://gitlab-devops.aeonth.com/devops/pipeline-template/cd-template/cd-example.git', cdLocalPath, appName, teamName);
