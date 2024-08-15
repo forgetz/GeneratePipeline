@@ -3,6 +3,8 @@ const https = require('https');
 const simpleGit = require('simple-git');
 const fs = require('fs').promises;
 const path = require('path');
+const crypto = require('crypto');
+const rimraf = require('rimraf');
 
 // GitLab API configuration
 const GITLAB_URL = 'https://gitlab-devops.aeonth.com';
@@ -134,6 +136,9 @@ async function modifyFiles(dirPath, appName, teamName) {
 async function cloneAndModifyRepository(templateUrl, localPath, appName, teamName) {
   console.log(`Cloning template repository: ${templateUrl}`);
   await simpleGit().clone(templateUrl, localPath);
+  
+  console.log('Removing .git directory...');
+  await fs.rm(path.join(localPath, '.git'), { recursive: true, force: true });
 
   console.log('Modifying files...');
   await modifyFiles(localPath, appName, teamName);
@@ -142,12 +147,21 @@ async function cloneAndModifyRepository(templateUrl, localPath, appName, teamNam
 async function pushToGitlab(localPath, remoteUrl) {
   console.log(`Pushing changes to GitLab: ${remoteUrl}`);
   const git = simpleGit(localPath);
+  await git.init();
   await git.add('./*');
   await git.commit('Initial commit');
-  await git.push(remoteUrl, 'master');
+  await git.addRemote('origin', remoteUrl);
+  await git.push('origin', 'master', ['--force']);
+}
+
+function generateUniqueId() {
+  return crypto.randomBytes(8).toString('hex');
 }
 
 async function setupCICD(appName, teamName) {
+  const uniqueId = generateUniqueId();
+  const tempDir = path.join(process.cwd(), `temp_${uniqueId}`);
+  
   try {
     const token = await getGitlabToken();
 
@@ -158,7 +172,7 @@ async function setupCICD(appName, teamName) {
     const ciProjectName = `ci-${appName}`;
     const ciProjectUrl = await createGitlabProject(ciProjectName, ciGroupId, token);
     if (ciProjectUrl) {
-      const ciLocalPath = `./${ciProjectName}`;
+      const ciLocalPath = path.join(tempDir, ciProjectName);
       await cloneAndModifyRepository(CI_TEMPLATE_URL, ciLocalPath, appName, teamName);
       await pushToGitlab(ciLocalPath, ciProjectUrl);
     }
@@ -170,7 +184,7 @@ async function setupCICD(appName, teamName) {
     const cdProjectName = `cd-${appName}`;
     const cdProjectUrl = await createGitlabProject(cdProjectName, cdGroupId, token);
     if (cdProjectUrl) {
-      const cdLocalPath = `./${cdProjectName}`;
+      const cdLocalPath = path.join(tempDir, cdProjectName);
       await cloneAndModifyRepository(CD_TEMPLATE_URL, cdLocalPath, appName, teamName);
       await pushToGitlab(cdLocalPath, cdProjectUrl);
     }
@@ -178,8 +192,11 @@ async function setupCICD(appName, teamName) {
     console.log('CI/CD setup completed successfully!');
   } catch (error) {
     console.error('Error during CI/CD setup:', error.message);
+  } finally {
+    console.log('Cleaning up temporary files...');
+    rimraf.sync(tempDir);
   }
 }
 
 // Usage
-setupCICD('otpapi', 'infra');
+setupCICD('otpapi', 'spi');
