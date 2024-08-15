@@ -1,4 +1,5 @@
 const axios = require('axios');
+const https = require('https');
 const { exec } = require('child_process');
 const fs = require('fs').promises;
 const path = require('path');
@@ -11,10 +12,20 @@ const execPromise = util.promisify(exec);
 const GITLAB_API_URL = 'https://gitlab-devops.aeonth.com/api/v4';
 const GITLAB_TOKEN = 'YOUR_GITLAB_ACCESS_TOKEN'; // Replace with your actual token
 
+// SSL Verification Option
+const DISABLE_SSL_VERIFY = true; // Set to false in production environments
+
+if (DISABLE_SSL_VERIFY) {
+  console.warn('\x1b[33m%s\x1b[0m', 'WARNING: SSL certificate verification is disabled. This is insecure and should not be used in production environments.');
+}
+
 // Axios instance for GitLab API requests
 const gitlabApi = axios.create({
   baseURL: GITLAB_API_URL,
-  headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
+  headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN },
+  httpsAgent: new https.Agent({  
+    rejectUnauthorized: !DISABLE_SSL_VERIFY
+  })
 });
 
 async function getProjectId(repositoryUrl) {
@@ -107,8 +118,17 @@ async function importTemplate(type, project, projectId) {
   const tempDir = path.join(__dirname, 'temp', `${project.app_name}-${type}-${Date.now()}`);
   
   try {
-    await execPromise(`git clone ${templateUrl} ${tempDir}`);
-    await execPromise(`git -C ${tempDir} push --mirror https://oauth2:${GITLAB_TOKEN}@gitlab-devops.aeonth.com/${targetFolder}.git`);
+    let gitCommand = `git clone ${templateUrl} ${tempDir}`;
+    if (DISABLE_SSL_VERIFY) {
+      gitCommand = `GIT_SSL_NO_VERIFY=true ${gitCommand}`;
+    }
+    await execPromise(gitCommand);
+
+    gitCommand = `git -C ${tempDir} push --mirror https://oauth2:${GITLAB_TOKEN}@gitlab-devops.aeonth.com/${targetFolder}.git`;
+    if (DISABLE_SSL_VERIFY) {
+      gitCommand = `GIT_SSL_NO_VERIFY=true ${gitCommand}`;
+    }
+    await execPromise(gitCommand);
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
