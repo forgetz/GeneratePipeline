@@ -1,124 +1,143 @@
 const axios = require('axios');
-const https = require('https');
-const { promises: fs } = require('fs');
+const { exec } = require('child_process');
+const fs = require('fs').promises;
 const path = require('path');
-const simpleGit = require('simple-git');
+const util = require('util');
 const csv = require('csv-parse/sync');
 
-const GITLAB_API_URL = 'https://gitlab-devops.aeonth.com/api/v4';
-const GITLAB_TOKEN = 'YOUR_GITLAB_PERSONAL_ACCESS_TOKEN';
+const execPromise = util.promisify(exec);
 
-// Create a custom Axios instance with SSL verification disabled
-const axiosInstance = axios.create({
-  httpsAgent: new https.Agent({  
-    rejectUnauthorized: false
-  })
+// GitLab API configuration
+const GITLAB_API_URL = 'https://gitlab-devops.aeonth.com/api/v4';
+const GITLAB_TOKEN = 'YOUR_GITLAB_ACCESS_TOKEN'; // Replace with your actual token
+
+// Axios instance for GitLab API requests
+const gitlabApi = axios.create({
+  baseURL: GITLAB_API_URL,
+  headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
 });
 
-async function processProjects(csvFilePath) {
+async function getProjectId(repositoryUrl) {
   try {
-    const fileContent = await fs.readFile(csvFilePath, 'utf8');
+    const encodedProjectPath = encodeURIComponent(
+      repositoryUrl.replace('https://gitlab-devops.aeonth.com/', '').replace('.git', '')
+    );
+    const response = await gitlabApi.get(`/projects/${encodedProjectPath}`);
+    return response.data.id;
+  } catch (error) {
+    console.error(`Error fetching project ID for ${repositoryUrl}:`, error.message);
+    throw error;
+  }
+}
+
+async function processProjects() {
+  try {
+    const fileContent = await fs.readFile('projects.csv', 'utf-8');
     const records = csv.parse(fileContent, { columns: true, skip_empty_lines: true });
 
     for (const record of records) {
-      await setupCICD(record.app_name, record.app_team, record.repository_url, record.ci_template, record.cd_template);
+      await setupCICD(record);
     }
 
-    console.log('All projects processed successfully!');
+    console.log('All projects processed successfully');
   } catch (error) {
     console.error('Error processing projects:', error.message);
   }
 }
 
-async function setupCICD(appName, teamName, repoUrl, ciTemplateUrl, cdTemplateUrl) {
-  const ciPath = `/devops/pipeline-template/ci/${teamName}`;
-  const cdPath = `/devops/pipeline-template/cd/${teamName}`;
-
+async function setupCICD(project) {
   try {
-    console.log(`Setting up CI/CD for ${appName} (${teamName})`);
+    console.log(`Starting CI/CD setup for ${project.app_name} in team ${project.app_team}`);
 
-    await createFolderIfNotExists(ciPath);
-    await importTemplate(ciTemplateUrl, `${ciPath}/${appName}-ci`);
-    await replaceValuesInFiles(`${ciPath}/${appName}-ci`, appName, teamName);
+    const projectId = await getProjectId(project.repository_url);
+    console.log(`Project ID for ${project.app_name}: ${projectId}`);
 
-    await createFolderIfNotExists(cdPath);
-    await importTemplate(cdTemplateUrl, `${cdPath}/${appName}-cd`);
-    await replaceValuesInFiles(`${cdPath}/${appName}-cd`, appName, teamName);
+    // CI setup
+    await processSetup('ci', project, projectId);
 
-    console.log(`CI/CD setup completed for ${appName}`);
+    // CD setup
+    await processSetup('cd', project, projectId);
+
+    console.log(`CI/CD setup completed successfully for ${project.app_name}`);
   } catch (error) {
-    console.error(`Error setting up CI/CD for ${appName}:`, error.message);
+    console.error(`Error setting up CI/CD for ${project.app_name}:`, error.message);
   }
 }
 
-async function createFolderIfNotExists(folderPath) {
+async function processSetup(type, project, projectId) {
+  console.log(`Processing ${type.toUpperCase()} setup for ${project.app_name}`);
+
+  // Step 1: Check and create team folder
+  await checkAndCreateFolder(project.app_team, type, projectId);
+
+  // Step 2: Import template and create app folder
+  await importTemplate(type, project, projectId);
+
+  // Step 3: Replace placeholders
+  await replacePlaceholders(type, project, projectId);
+}
+
+async function checkAndCreateFolder(teamName, type, projectId) {
+  const folderPath = `devops/pipeline-template/${type}/${teamName}`;
   try {
-    await axiosInstance.get(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template${encodeURIComponent(folderPath)}`, {
-      headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
+    await gitlabApi.get(`/projects/${projectId}/repository/tree`, {
+      params: { path: folderPath }
     });
-    console.log(`Folder ${folderPath} already exists.`);
+    console.log(`Folder ${folderPath} already exists`);
   } catch (error) {
     if (error.response && error.response.status === 404) {
-      await axiosInstance.post(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/files${encodeURIComponent(folderPath)}%2F.gitkeep`, {
+      console.log(`Creating folder ${folderPath}`);
+      await gitlabApi.post(`/projects/${projectId}/repository/files/${encodeURIComponent(folderPath + '/.gitkeep')}`, {
         branch: 'main',
         content: '',
-        commit_message: `Create ${folderPath} folder`
-      }, {
-        headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
+        commit_message: `Create ${teamName} folder for ${type}`
       });
-      console.log(`Created folder ${folderPath}`);
     } else {
       throw error;
     }
   }
 }
 
-async function importTemplate(templateUrl, destinationPath) {
-  const tempDir = path.join(__dirname, 'temp');
-  await fs.mkdir(tempDir, { recursive: true });
+async function importTemplate(type, project, projectId) {
+  const templateUrl = type === 'ci' ? project.ci_template : project.cd_template;
+  const targetFolder = `devops/pipeline-template/${type}/${project.app_team}/${project.app_name}-${type}`;
 
-  const git = simpleGit();
-  await git.clone(templateUrl, tempDir);
+  console.log(`Importing ${type.toUpperCase()} template for ${project.app_name}`);
 
-  await axiosInstance.post(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/files${encodeURIComponent(destinationPath)}`, {
-    branch: 'main',
-    content: await fs.readFile(path.join(tempDir, 'README.md'), 'utf8'),
-    commit_message: `Import template to ${destinationPath}`
-  }, {
-    headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
-  });
-
-  await fs.rmdir(tempDir, { recursive: true });
-  console.log(`Imported template to ${destinationPath}`);
+  const tempDir = path.join(__dirname, 'temp', `${project.app_name}-${type}-${Date.now()}`);
+  
+  try {
+    await execPromise(`git clone ${templateUrl} ${tempDir}`);
+    await execPromise(`git -C ${tempDir} push --mirror https://oauth2:${GITLAB_TOKEN}@gitlab-devops.aeonth.com/${targetFolder}.git`);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 }
 
-async function replaceValuesInFiles(folderPath, appName, teamName) {
-  const files = await axiosInstance.get(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/tree`, {
-    params: { path: folderPath },
-    headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
+async function replacePlaceholders(type, project, projectId) {
+  const folderPath = `devops/pipeline-template/${type}/${project.app_team}/${project.app_name}-${type}`;
+  
+  console.log(`Replacing placeholders in ${folderPath}`);
+
+  const files = await gitlabApi.get(`/projects/${projectId}/repository/tree`, {
+    params: { path: folderPath, recursive: true }
   });
 
   for (const file of files.data) {
-    const content = await axiosInstance.get(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/files/${encodeURIComponent(file.path)}/raw`, {
-      params: { ref: 'main' },
-      headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
-    });
+    if (file.type === 'blob') {
+      const fileContent = await gitlabApi.get(`/projects/${projectId}/repository/files/${encodeURIComponent(file.path)}/raw`);
+      let updatedContent = fileContent.data
+        .replace(/{{VALUE_APP_NAME}}/g, project.app_name)
+        .replace(/{{VALUE_TEAM_NAME}}/g, project.app_team);
 
-    const updatedContent = content.data
-      .replace(/{{VALUE_APP_NAME}}/g, appName)
-      .replace(/{{VALUE_TEAM_NAME}}/g, teamName);
-
-    await axiosInstance.put(`${GITLAB_API_URL}/projects/devops%2Fpipeline-template/repository/files/${encodeURIComponent(file.path)}`, {
-      branch: 'main',
-      content: updatedContent,
-      commit_message: `Update ${file.path}`
-    }, {
-      headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
-    });
+      await gitlabApi.put(`/projects/${projectId}/repository/files/${encodeURIComponent(file.path)}`, {
+        branch: 'main',
+        content: updatedContent,
+        commit_message: `Update placeholders in ${file.path}`
+      });
+    }
   }
-
-  console.log(`Replaced values in files in ${folderPath}`);
 }
 
-// Usage example
-processProjects('path/to/your/projects.csv');
+// Start processing projects
+processProjects();
