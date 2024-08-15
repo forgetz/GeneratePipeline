@@ -94,6 +94,7 @@ async function createGitlabProject(projectName, groupId, token) {
   try {
     const response = await axiosInstance.post(`${GITLAB_API}/projects`, {
       name: projectName,
+      path: projectName,
       namespace_id: groupId,
     }, {
       headers: { 'PRIVATE-TOKEN': token }
@@ -136,27 +137,28 @@ async function pushToGitlab(localPath, remoteUrl) {
 async function setupCICD(appName, teamName) {
   try {
     const token = await getGitlabToken();
-    const ciParentPath = 'devops/pipeline-template/ci';
-    const cdParentPath = 'devops/pipeline-template/cd';
+    const parentPath = 'devops/pipeline-template';
 
-    // Get parent group IDs
-    const ciParentId = await getParentGroupId(token, ciParentPath);
-    const cdParentId = await getParentGroupId(token, cdParentPath);
+    // Get parent group ID
+    const parentId = await getParentGroupId(token, parentPath);
+
+    // Get or create team folder
+    const groupId = await getOrCreateGitlabFolder(teamName, parentId, token);
 
     // CI Setup
-    const ciGroupId = await getOrCreateGitlabFolder(teamName, ciParentId, token);
-    const ciProjectUrl = await createGitlabProject(`ci-${teamName}`, ciGroupId, token);
+    const ciProjectName = `ci-${appName}`;
+    const ciProjectUrl = await createGitlabProject(ciProjectName, groupId, token);
     if (ciProjectUrl) {
-      const ciLocalPath = `./ci-${teamName}`;
+      const ciLocalPath = `./${ciProjectName}`;
       await cloneAndModifyRepository(CI_TEMPLATE_URL, ciLocalPath, appName, teamName);
       await pushToGitlab(ciLocalPath, ciProjectUrl);
     }
 
     // CD Setup
-    const cdGroupId = await getOrCreateGitlabFolder(teamName, cdParentId, token);
-    const cdProjectUrl = await createGitlabProject(`cd-${teamName}`, cdGroupId, token);
+    const cdProjectName = `cd-${appName}`;
+    const cdProjectUrl = await createGitlabProject(cdProjectName, groupId, token);
     if (cdProjectUrl) {
-      const cdLocalPath = `./cd-${teamName}`;
+      const cdLocalPath = `./${cdProjectName}`;
       await cloneAndModifyRepository(CD_TEMPLATE_URL, cdLocalPath, appName, teamName);
       await pushToGitlab(cdLocalPath, cdProjectUrl);
     }
