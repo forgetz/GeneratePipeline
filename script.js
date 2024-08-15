@@ -29,13 +29,35 @@ async function getGitlabToken() {
   }
 }
 
-async function createGitlabFolder(teamName, token) {
+// Function to get parent group ID
+async function getParentGroupId(token, parentPath) {
+  console.log(`Retrieving parent group ID for path: ${parentPath}`);
+  try {
+    const response = await axiosInstance.get(`${GITLAB_API}/groups`, {
+      params: { search: parentPath },
+      headers: { 'PRIVATE-TOKEN': token }
+    });
+    
+    const group = response.data.find(g => g.full_path === parentPath);
+    if (group) {
+      console.log(`Parent group ID found: ${group.id}`);
+      return group.id;
+    } else {
+      throw new Error(`Parent group not found for path: ${parentPath}`);
+    }
+  } catch (error) {
+    console.error(`Error retrieving parent group ID: ${error.message}`);
+    throw error;
+  }
+}
+
+async function createGitlabFolder(teamName, parentId, token) {
   console.log(`Creating GitLab folder for team: ${teamName}`);
   try {
     const response = await axiosInstance.post(`${GITLAB_API}/groups`, {
       name: teamName,
       path: teamName,
-      parent_id: 'PARENT_GROUP_ID', // Replace with the actual parent group ID
+      parent_id: parentId,
     }, {
       headers: { 'PRIVATE-TOKEN': token }
     });
@@ -98,9 +120,15 @@ async function pushToGitlab(localPath, remoteUrl) {
 async function setupCICD(appName, teamName) {
   try {
     const token = await getGitlabToken();
+    const ciParentPath = 'devops/pipeline-template/ci';
+    const cdParentPath = 'devops/pipeline-template/cd';
+
+    // Get parent group IDs
+    const ciParentId = await getParentGroupId(token, ciParentPath);
+    const cdParentId = await getParentGroupId(token, cdParentPath);
 
     // CI Setup
-    const ciGroupId = await createGitlabFolder(teamName, token);
+    const ciGroupId = await createGitlabFolder(teamName, ciParentId, token);
     const ciProjectUrl = await createGitlabProject(`ci-${teamName}`, ciGroupId, token);
     if (ciProjectUrl) {
       const ciLocalPath = `./ci-${teamName}`;
@@ -109,7 +137,7 @@ async function setupCICD(appName, teamName) {
     }
 
     // CD Setup
-    const cdGroupId = await createGitlabFolder(teamName, token);
+    const cdGroupId = await createGitlabFolder(teamName, cdParentId, token);
     const cdProjectUrl = await createGitlabProject(`cd-${teamName}`, cdGroupId, token);
     if (cdProjectUrl) {
       const cdLocalPath = `./cd-${teamName}`;
