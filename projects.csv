@@ -1,0 +1,3 @@
+app_name,app_team,repository_url,ci_template,cd_template
+otpapi,spi,https://gitlab-devops.aeonth.com/spi/otpapi.git,https://gitlab-devops.aeonth.com/devops/pipeline-template/ci-template/ci-example.git,https://gitlab-devops.aeonth.com/devops/pipeline-template/cd-template/cd-example.git
+nodejs,spi,https://gitlab-devops.aeonth.com/spi/nodejs-app.git,https://gitlab-devops.aeonth.com/devops/pipeline-template/ci-template/ci-example.git,https://gitlab-devops.aeonth.com/devops/pipeline-template/cd-template/cd-example.git
