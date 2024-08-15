@@ -5,6 +5,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const util = require('util');
 const csv = require('csv-parse/sync');
+const os = require('os');
 
 const execPromise = util.promisify(exec);
 
@@ -27,6 +28,21 @@ const gitlabApi = axios.create({
     rejectUnauthorized: !DISABLE_SSL_VERIFY
   })
 });
+
+// Function to execute Git command with SSL verification disabled if needed
+async function executeGitCommand(command) {
+  let fullCommand;
+  if (DISABLE_SSL_VERIFY) {
+    if (os.platform() === 'win32') {
+      fullCommand = `set GIT_SSL_NO_VERIFY=true && ${command}`;
+    } else {
+      fullCommand = `GIT_SSL_NO_VERIFY=true ${command}`;
+    }
+  } else {
+    fullCommand = command;
+  }
+  return execPromise(fullCommand);
+}
 
 async function getProjectId(repositoryUrl) {
   try {
@@ -118,17 +134,8 @@ async function importTemplate(type, project, projectId) {
   const tempDir = path.join(__dirname, 'temp', `${project.app_name}-${type}-${Date.now()}`);
   
   try {
-    let gitCommand = `git clone ${templateUrl} ${tempDir}`;
-    if (DISABLE_SSL_VERIFY) {
-      gitCommand = `GIT_SSL_NO_VERIFY=true ${gitCommand}`;
-    }
-    await execPromise(gitCommand);
-
-    gitCommand = `git -C ${tempDir} push --mirror https://oauth2:${GITLAB_TOKEN}@gitlab-devops.aeonth.com/${targetFolder}.git`;
-    if (DISABLE_SSL_VERIFY) {
-      gitCommand = `GIT_SSL_NO_VERIFY=true ${gitCommand}`;
-    }
-    await execPromise(gitCommand);
+    await executeGitCommand(`git clone ${templateUrl} ${tempDir}`);
+    await executeGitCommand(`git -C ${tempDir} push --mirror https://oauth2:${GITLAB_TOKEN}@gitlab-devops.aeonth.com/${targetFolder}.git`);
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
