@@ -1,138 +1,107 @@
-const { Gitlab } = require('@gitbeaker/node');
+const axios = require('axios');
 const simpleGit = require('simple-git');
 const fs = require('fs').promises;
 const path = require('path');
-const https = require('https');
 
-async function getGitLabToken() {
+// GitLab API configuration
+const GITLAB_URL = 'https://gitlab-devops.aeonth.com';
+const GITLAB_TOKEN = 'YOUR_GITLAB_TOKEN';
+const GITLAB_API = `${GITLAB_URL}/api/v4`;
+
+// Disable certificate verification (not recommended for production)
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
+async function createGitlabFolder(teamName) {
+  console.log(`Creating GitLab folder for team: ${teamName}`);
   try {
-    return await fs.readFile('gitlab_token.txt', 'utf8');
+    const response = await axios.post(`${GITLAB_API}/groups`, {
+      name: teamName,
+      path: teamName,
+      parent_id: 'PARENT_GROUP_ID', // Replace with the actual parent group ID
+    }, {
+      headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
+    });
+    console.log(`Folder created successfully: ${response.data.web_url}`);
+    return response.data.id;
   } catch (error) {
-    console.error('Error reading GitLab token file:', error);
-    process.exit(1);
+    if (error.response && error.response.status === 409) {
+      console.log(`Folder ${teamName} already exists. Skipping creation.`);
+      return null;
+    }
+    console.error(`Error creating folder: ${error.message}`);
+    throw error;
   }
 }
 
-async function initializeGitLabAPI() {
-  const token = await getGitLabToken();
-  
-  return new Gitlab({
-    host: 'https://gitlab-devops.aeonth.com',
-    token: token.trim(),
-    rejectUnauthorized: false, // Disable SSL verification
-  });
+async function createGitlabProject(projectName, groupId) {
+  console.log(`Creating GitLab project: ${projectName}`);
+  try {
+    const response = await axios.post(`${GITLAB_API}/projects`, {
+      name: projectName,
+      namespace_id: groupId,
+    }, {
+      headers: { 'PRIVATE-TOKEN': GITLAB_TOKEN }
+    });
+    console.log(`Project created successfully: ${response.data.web_url}`);
+    return response.data.ssh_url_to_repo;
+  } catch (error) {
+    if (error.response && error.response.status === 409) {
+      console.log(`Project ${projectName} already exists. Skipping creation.`);
+      return null;
+    }
+    console.error(`Error creating project: ${error.message}`);
+    throw error;
+  }
 }
 
-// Create a custom HTTPS agent that doesn't verify SSL certificates
-const agent = new https.Agent({
-  rejectUnauthorized: false
-});
+async function cloneAndModifyRepository(templateUrl, localPath, appName, teamName) {
+  console.log(`Cloning template repository: ${templateUrl}`);
+  await simpleGit().clone(templateUrl, localPath);
+
+  console.log('Modifying files...');
+  const files = await fs.readdir(localPath);
+  for (const file of files) {
+    const filePath = path.join(localPath, file);
+    let content = await fs.readFile(filePath, 'utf8');
+    content = content.replace(/{{VALUE_APP_NAME}}/g, appName)
+                     .replace(/{{VALUE_TEAM_NAME}}/g, teamName);
+    await fs.writeFile(filePath, content);
+  }
+}
+
+async function pushToGitlab(localPath, remoteUrl) {
+  console.log(`Pushing changes to GitLab: ${remoteUrl}`);
+  const git = simpleGit(localPath);
+  await git.add('./*');
+  await git.commit('Initial commit');
+  await git.push(remoteUrl, 'master');
+}
 
 async function setupCICD(appName, teamName) {
   try {
-    const api = await initializeGitLabAPI();
+    // CI Setup
+    const ciGroupId = await createGitlabFolder(teamName);
+    const ciProjectUrl = await createGitlabProject(`ci-${teamName}`, ciGroupId);
+    if (ciProjectUrl) {
+      const ciLocalPath = `./ci-${teamName}`;
+      await cloneAndModifyRepository('https://gitlab-devops.aeonth.com/devops/pipeline-template/ci-template/ci-example.git', ciLocalPath, appName, teamName);
+      await pushToGitlab(ciLocalPath, ciProjectUrl);
+    }
 
-    // Step 1: Check and create team folder
-    const ciProjectId = 'devops/pipeline-template/ci';
-    await createTeamFolder(api, ciProjectId, teamName);
-
-    // Step 2 & 3: Import CI template and replace values
-    await importAndReplaceTemplate(
-      api,
-      'https://gitlab-devops.aeonth.com/devops/pipeline-template/ci-template/ci-example.git',
-      `${teamName}/${appName}-ci`,
-      appName,
-      teamName,
-      'ci'
-    );
-
-    // Step 2 & 3 for CD: Import CD template and replace values
-    await importAndReplaceTemplate(
-      api,
-      'https://gitlab-devops.aeonth.com/devops/pipeline-template/cd-template/cd-example.git',
-      `${teamName}/${appName}-cd`,
-      appName,
-      teamName,
-      'cd'
-    );
+    // CD Setup
+    const cdGroupId = await createGitlabFolder(teamName);
+    const cdProjectUrl = await createGitlabProject(`cd-${teamName}`, cdGroupId);
+    if (cdProjectUrl) {
+      const cdLocalPath = `./cd-${teamName}`;
+      await cloneAndModifyRepository('https://gitlab-devops.aeonth.com/devops/pipeline-template/cd-template/cd-example.git', cdLocalPath, appName, teamName);
+      await pushToGitlab(cdLocalPath, cdProjectUrl);
+    }
 
     console.log('CI/CD setup completed successfully!');
   } catch (error) {
-    console.error('Error setting up CI/CD:', error);
+    console.error('Error during CI/CD setup:', error.message);
   }
 }
 
-async function createTeamFolder(api, projectId, teamName) {
-  try {
-    await api.RepositoryFiles.create(
-      projectId,
-      `${teamName}/.gitkeep`,
-      'main',
-      'Create team folder',
-      ''
-    );
-    console.log(`Team folder '${teamName}' created successfully.`);
-  } catch (error) {
-    if (error.response && error.response.status === 400 && error.response.data.message === 'A file with this name already exists') {
-      console.log(`Team folder '${teamName}' already exists.`);
-    } else {
-      throw error;
-    }
-  }
-}
-
-async function importAndReplaceTemplate(api, templateUrl, destPath, appName, teamName, type) {
-  const tempDir = `temp-${type}-${Date.now()}`;
-  
-  try {
-    // Clone template repository
-    await simpleGit().env('GIT_SSL_NO_VERIFY', '1').clone(templateUrl, tempDir);
-
-    // Replace values in all files
-    await replaceValuesInDirectory(tempDir, appName, teamName);
-
-    // Create new project in GitLab
-    const project = await api.Projects.create({
-      name: `${appName}-${type}`,
-      namespace_id: await getNamespaceId(api, `devops/pipeline-template/${type}/${teamName}`),
-      visibility: 'internal'
-    });
-
-    // Push modified files to the new project
-    const git = simpleGit(tempDir).env('GIT_SSL_NO_VERIFY', '1');
-    await git.removeRemote('origin');
-    await git.addRemote('origin', project.http_url_to_repo);
-    await git.add('./*');
-    await git.commit('Initial commit');
-    await git.push('origin', 'main');
-
-    console.log(`${type.toUpperCase()} template imported and values replaced successfully.`);
-  } finally {
-    // Clean up temporary directory
-    await fs.rm(tempDir, { recursive: true, force: true });
-  }
-}
-
-async function replaceValuesInDirectory(dir, appName, teamName) {
-  const files = await fs.readdir(dir);
-  for (const file of files) {
-    const filePath = path.join(dir, file);
-    const stat = await fs.stat(filePath);
-    if (stat.isDirectory()) {
-      await replaceValuesInDirectory(filePath, appName, teamName);
-    } else {
-      let content = await fs.readFile(filePath, 'utf8');
-      content = content.replace(/{{VALUE_APP_NAME}}/g, appName);
-      content = content.replace(/{{VALUE_TEAM_NAME}}/g, teamName);
-      await fs.writeFile(filePath, content, 'utf8');
-    }
-  }
-}
-
-async function getNamespaceId(api, path) {
-  const namespace = await api.Namespaces.show(path);
-  return namespace.id;
-}
-
-// Usage example
+// Usage
 setupCICD('otpapi', 'spi');
