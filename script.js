@@ -132,7 +132,7 @@ async function setupCICD(appName, teamName) {
     const ciProjectUrl = await createGitlabProject(`ci-${teamName}`, ciGroupId, token);
     if (ciProjectUrl) {
       const ciLocalPath = `./ci-${teamName}`;
-      await cloneAndModifyRepository('https://gitlab-devops.aeonth.com/devops/pipeline-template/ci-template/ci-example.git', ciLocalPath, appName, teamName);
+      await cloneAndModifyRepository('git@gitlab-devops.aeonth.com:devops/pipeline-template/ci-template/ci-example.git', ciLocalPath, appName, teamName);
       await pushToGitlab(ciLocalPath, ciProjectUrl);
     }
 
