@@ -8,6 +8,10 @@ const path = require('path');
 const GITLAB_URL = 'https://gitlab-devops.aeonth.com';
 const GITLAB_API = `${GITLAB_URL}/api/v4`;
 
+// Template repository URLs
+const CI_TEMPLATE_URL = 'git@gitlab-devops.aeonth.com:devops/pipeline-template/ci-template/ci-example.git';
+const CD_TEMPLATE_URL = 'git@gitlab-devops.aeonth.com:devops/pipeline-template/cd-template/cd-example.git';
+
 // Create a custom HTTPS agent that ignores SSL certificate errors
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false
@@ -51,24 +55,36 @@ async function getParentGroupId(token, parentPath) {
   }
 }
 
-async function createGitlabFolder(teamName, parentId, token) {
-  console.log(`Creating GitLab folder for team: ${teamName}`);
+async function getOrCreateGitlabFolder(teamName, parentId, token) {
+  console.log(`Checking if GitLab folder exists for team: ${teamName}`);
   try {
-    const response = await axiosInstance.post(`${GITLAB_API}/groups`, {
+    // First, try to get the group
+    const response = await axiosInstance.get(`${GITLAB_API}/groups`, {
+      params: { search: teamName },
+      headers: { 'PRIVATE-TOKEN': token }
+    });
+
+    const existingGroup = response.data.find(g => g.name === teamName && g.parent_id === parentId);
+    
+    if (existingGroup) {
+      console.log(`Folder ${teamName} already exists. Using existing folder.`);
+      return existingGroup.id;
+    }
+
+    // If the group doesn't exist, create it
+    console.log(`Creating GitLab folder for team: ${teamName}`);
+    const createResponse = await axiosInstance.post(`${GITLAB_API}/groups`, {
       name: teamName,
       path: teamName,
       parent_id: parentId,
     }, {
       headers: { 'PRIVATE-TOKEN': token }
     });
-    console.log(`Folder created successfully: ${response.data.web_url}`);
-    return response.data.id;
+    
+    console.log(`Folder created successfully: ${createResponse.data.web_url}`);
+    return createResponse.data.id;
   } catch (error) {
-    if (error.response && error.response.status === 409) {
-      console.log(`Folder ${teamName} already exists. Skipping creation.`);
-      return null;
-    }
-    console.error(`Error creating folder: ${error.message}`);
+    console.error(`Error handling GitLab folder: ${error.message}`);
     throw error;
   }
 }
@@ -128,20 +144,20 @@ async function setupCICD(appName, teamName) {
     const cdParentId = await getParentGroupId(token, cdParentPath);
 
     // CI Setup
-    const ciGroupId = await createGitlabFolder(teamName, ciParentId, token);
+    const ciGroupId = await getOrCreateGitlabFolder(teamName, ciParentId, token);
     const ciProjectUrl = await createGitlabProject(`ci-${teamName}`, ciGroupId, token);
     if (ciProjectUrl) {
       const ciLocalPath = `./ci-${teamName}`;
-      await cloneAndModifyRepository('git@gitlab-devops.aeonth.com:devops/pipeline-template/ci-template/ci-example.git', ciLocalPath, appName, teamName);
+      await cloneAndModifyRepository(CI_TEMPLATE_URL, ciLocalPath, appName, teamName);
       await pushToGitlab(ciLocalPath, ciProjectUrl);
     }
 
     // CD Setup
-    const cdGroupId = await createGitlabFolder(teamName, cdParentId, token);
+    const cdGroupId = await getOrCreateGitlabFolder(teamName, cdParentId, token);
     const cdProjectUrl = await createGitlabProject(`cd-${teamName}`, cdGroupId, token);
     if (cdProjectUrl) {
       const cdLocalPath = `./cd-${teamName}`;
-      await cloneAndModifyRepository('https://gitlab-devops.aeonth.com/devops/pipeline-template/cd-template/cd-example.git', cdLocalPath, appName, teamName);
+      await cloneAndModifyRepository(CD_TEMPLATE_URL, cdLocalPath, appName, teamName);
       await pushToGitlab(cdLocalPath, cdProjectUrl);
     }
 
@@ -152,4 +168,4 @@ async function setupCICD(appName, teamName) {
 }
 
 // Usage
-setupCICD('otpapi', 'spi');
+setupCICD('otpapi', 'infra');
