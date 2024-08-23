@@ -1,0 +1,40 @@
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scale-down-project-a
+  namespace: projectans
+spec:
+  schedule: "0 0 16 * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: kubectl
+            image: bitnami/kubectl
+            command:
+            - /bin/sh
+            - -c
+            - kubectl scale deployment project-a --replicas=5
+          restartPolicy: OnFailure
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scale-up-project-a
+  namespace: projectans
+spec:
+  schedule: "0 0 28 * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: kubectl
+            image: bitnami/kubectl
+            command:
+            - /bin/sh
+            - -c
+            - kubectl scale deployment project-a --replicas=10
+          restartPolicy: OnFailure
