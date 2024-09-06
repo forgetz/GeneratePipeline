@@ -17,7 +17,7 @@ const axiosInstance = axios.create({
   })
 });
 
-async function getJobsRecursively(url) {
+async function getJobsRecursively(url, parentPath = '') {
   const response = await axiosInstance.get(`${url}/api/json`, { auth });
   const data = response.data;
   
@@ -25,12 +25,13 @@ async function getJobsRecursively(url) {
   
   if (data.jobs) {
     for (const item of data.jobs) {
+      const fullPath = parentPath ? `${parentPath}/${item.name}` : item.name;
       if (item._class.includes('WorkflowJob')) {
         // This is a pipeline job
-        jobs.push(item);
+        jobs.push({ ...item, fullName: fullPath, rootFolder: parentPath.split('/')[0] || 'Root' });
       } else if (item._class.includes('Folder')) {
         // This is a folder, recursively get jobs inside it
-        const subJobs = await getJobsRecursively(item.url);
+        const subJobs = await getJobsRecursively(item.url, fullPath);
         jobs = jobs.concat(subJobs);
       }
     }
@@ -74,7 +75,9 @@ async function generateReport(startDate, endDate) {
         allBuildTimes.push(buildDetails.duration / 1000); // Convert to seconds
         
         if (buildDetails.result === 'SUCCESS') {
-          if (buildDetails.stages && buildDetails.stages.some(stage => stage.name === 'deployment to production')) {
+          // Check if this is a production build
+          // Adjust this condition based on how you identify production builds
+          if (buildDetails.description && buildDetails.description.includes('deployment to production')) {
             prodBuilds++;
             prodBuildTimes.push(buildDetails.duration / 1000);
           }
@@ -100,6 +103,7 @@ async function generateReport(startDate, endDate) {
     
     reportData.push({
       Project: job.fullName,
+      'Root Folder': job.rootFolder,
       'total build on prod': prodBuilds,
       'average build time successfully': avgProdBuildTime,
       'average build time': avgAllBuildTime,
@@ -112,6 +116,7 @@ async function generateReport(startDate, endDate) {
 
   worksheet.columns = [
     { header: 'Project', key: 'Project', width: 50 },
+    { header: 'Root Folder', key: 'Root Folder', width: 20 },
     { header: 'total build on prod', key: 'total build on prod', width: 20 },
     { header: 'average build time successfully', key: 'average build time successfully', width: 30 },
     { header: 'average build time', key: 'average build time', width: 20 },
